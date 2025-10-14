@@ -1,0 +1,21 @@
+{
+  "name": "pixel-layer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7"
+  },
+  "dependencies": {
+    "earcut": "^3.0.2",
+    "gl-matrix": "^3.4.4",
+    "maplibre-gl": "^5.9.0"
+  }
+}

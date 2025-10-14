@@ -1,0 +1,32 @@
+{
+  "version": 8,
+  "name": "Pixel Art Empty",
+  "sources": {
+    "openmaptiles": {
+      "type": "vector",
+      "url": "https://wms.wheregroup.com/tileserver/tile/world-0-14.json"
+    }
+  },
+  "sprite": "https://wms.wheregroup.com/tileserver/sprites/osm-bright",
+  "glyphs": "https://wms.wheregroup.com/tileserver/fonts/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#8c7861"
+      }
+    },
+    {
+      "id": "building",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "building",
+      "paint": {
+        "fill-color": "#dfdbd7",
+        "fill-opacity": 0,
+        "fill-antialias": true
+      }
+    }
+  ]
+}
