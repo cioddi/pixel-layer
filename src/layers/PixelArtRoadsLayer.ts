@@ -1,9 +1,19 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 
 const MAPLIBRE_EXTENT = 8192;
 
 import vertexSource from '../shaders/pixel_roads.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_roads.frag.glsl?raw';
+
+export type RoadClassifyFn = (classValue: string, feature: any) => number;
+
+export interface PixelArtRoadsLayerOptions {
+  id?: string;
+  source?: string;
+  sourceLayer?: string;
+  classProperty?: string;
+  classify?: RoadClassifyFn;
+}
 
 interface RoadMesh {
   key: string;
@@ -30,6 +40,8 @@ export class PixelArtRoadsLayer {
   renderingMode: '3d';
   source: string;
   sourceLayer: string;
+  classProperty: string;
+  classifyFn: RoadClassifyFn;
 
   map?: maplibregl.Map;
   program?: WebGLProgram;
@@ -52,12 +64,14 @@ export class PixelArtRoadsLayer {
     }
   };
 
-  constructor(options: { id?: string; source?: string; sourceLayer?: string } = {}) {
+  constructor(options: PixelArtRoadsLayerOptions = {}) {
     this.id = options.id || 'pixel-art-roads';
     this.type = 'custom';
     this.renderingMode = '3d';
     this.source = options.source || 'openmaptiles';
     this.sourceLayer = options.sourceLayer || 'transportation';
+    this.classProperty = options.classProperty || 'class';
+    this.classifyFn = options.classify || PixelArtRoadsLayer.defaultClassify;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -202,8 +216,11 @@ export class PixelArtRoadsLayer {
         if (feature.type !== 2) continue; // Only linestrings
 
         const properties = feature.properties || {};
-        const roadClass = properties.class || '';
-        const roadType = this.classifyRoad(roadClass);
+        const classValueRaw = properties[this.classProperty];
+        const classValue = classValueRaw == null ? '' : String(classValueRaw);
+        const roadType = this.sanitizeClassifyResult(
+          this.classifyFn(classValue, feature)
+        );
 
         const geometry = feature.loadGeometry();
         if (!geometry || geometry.length === 0) continue;
@@ -282,10 +299,15 @@ export class PixelArtRoadsLayer {
     console.log(`Loaded ${processedCount} road segments, ${this.vertexCount} vertices`);
   }
 
-  private classifyRoad(roadClass: string): number {
-    if (roadClass.includes('motorway') || roadClass.includes('trunk')) return 0; // Highway
-    if (roadClass.includes('primary')) return 1; // Primary
-    if (roadClass.includes('secondary') || roadClass.includes('tertiary')) return 2; // Secondary
+  private sanitizeClassifyResult(value: number): number {
+    return Number.isFinite(value) ? value : 3;
+  }
+
+  private static defaultClassify(roadClass: string): number {
+    const normalized = roadClass.toLowerCase();
+    if (normalized.includes('motorway') || normalized.includes('trunk')) return 0; // Highway
+    if (normalized.includes('primary')) return 1; // Primary
+    if (normalized.includes('secondary') || normalized.includes('tertiary')) return 2; // Secondary
     return 3; // Residential/other
   }
 

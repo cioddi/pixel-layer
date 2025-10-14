@@ -1,4 +1,4 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import earcut from 'earcut';
 import { classifyRings } from '@maplibre/maplibre-gl-style-spec';
 
@@ -10,7 +10,9 @@ import fragmentSource from '../shaders/pixel_buildings.frag.glsl?raw';
 const DEFAULT_HEIGHT_KEYS = ['render_height', 'height', 'loft_height'];
 const DEFAULT_MIN_HEIGHT_KEYS = ['render_min_height', 'min_height', 'base_height'];
 
-interface PixelArtLayerOptions {
+export type BuildingClassifyFn = (properties: Record<string, any>) => number;
+
+export interface PixelArtBuildingsLayerSimpleOptions {
   id?: string;
   source?: string;
   sourceLayer?: string;
@@ -18,6 +20,7 @@ interface PixelArtLayerOptions {
   minHeightProperty?: string | string[];
   colorProperty?: string;
   hide3dProperty?: string;
+  getBuildingType?: BuildingClassifyFn;
 }
 
 interface TileMesh {
@@ -47,6 +50,7 @@ export class PixelArtBuildingsLayerSimple {
   minHeightPropertyKeys: string[];
   colorProperty: string;
   hide3dProperty: string;
+  classifyBuildingFn?: BuildingClassifyFn;
 
   map?: maplibregl.Map;
   program?: WebGLProgram;
@@ -69,7 +73,7 @@ export class PixelArtBuildingsLayerSimple {
     }
   };
 
-  constructor(options: PixelArtLayerOptions = {}) {
+  constructor(options: PixelArtBuildingsLayerSimpleOptions = {}) {
     this.id = options.id || 'pixel-art-buildings';
     this.type = 'custom';
     this.renderingMode = '3d';
@@ -79,6 +83,7 @@ export class PixelArtBuildingsLayerSimple {
     this.minHeightPropertyKeys = this.normalizePropertyKeys(options.minHeightProperty, DEFAULT_MIN_HEIGHT_KEYS);
     this.colorProperty = options.colorProperty || 'building';
     this.hide3dProperty = options.hide3dProperty || 'hide_3d';
+    this.classifyBuildingFn = options.getBuildingType;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -222,14 +227,9 @@ export class PixelArtBuildingsLayerSimple {
 
       const extent: number = vtLayer.extent || 4096;
       const tileID = tile.tileID;
-      const transform = (this.map as any).transform;
-      const zoom = transform.zoom as number;
       const scaleFactor = MAPLIBRE_EXTENT / extent;
       const tileIDClone = typeof tileID.clone === 'function' ? tileID.clone() : tileID;
       const tileKey = tileID.key;
-      const pixelsPerMeter = transform.pixelsPerMeter as number;
-      const tileUnitsPerPixel = MAPLIBRE_EXTENT / (tile.tileSize * Math.pow(2, zoom - tileID.overscaledZ));
-      const metersToTileUnits = pixelsPerMeter * tileUnitsPerPixel;
 
       const existing = newMeshes.get(tileKey);
       const staging: TileMeshStaging = existing || {
@@ -477,9 +477,16 @@ export class PixelArtBuildingsLayerSimple {
   }
 
   private classifyBuilding(props: Record<string, any>): number {
-    const building = (props[this.colorProperty] || '').toString();
-    if (building === 'cathedral' || building === 'church') return 0;
-    if (building === 'industrial' || building === 'warehouse') return 1;
+    if (this.classifyBuildingFn) {
+      const result = this.classifyBuildingFn(props);
+      if (Number.isFinite(result)) {
+        return result;
+      }
+    }
+
+    const building = (props[this.colorProperty] || '').toString().toLowerCase();
+    if (building.includes('cathedral') || building.includes('church')) return 0;
+    if (building.includes('industrial') || building.includes('warehouse') || building.includes('factory')) return 1;
     return 2;
   }
 

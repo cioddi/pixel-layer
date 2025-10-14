@@ -1,10 +1,20 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import earcut from 'earcut';
 
 const MAPLIBRE_EXTENT = 8192;
 
 import vertexSource from '../shaders/pixel_parks.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_parks.frag.glsl?raw';
+
+export type ParkClassifyFn = (classValue: string, feature: any) => number;
+
+export interface PixelArtParksLayerOptions {
+  id?: string;
+  source?: string;
+  sourceLayer?: string;
+  classProperty?: string;
+  classify?: ParkClassifyFn;
+}
 
 interface ParkMesh {
   key: string;
@@ -29,6 +39,8 @@ export class PixelArtParksLayer {
   renderingMode: '3d';
   source: string;
   sourceLayer: string;
+  classProperty: string;
+  classifyFn: ParkClassifyFn;
 
   map?: maplibregl.Map;
   program?: WebGLProgram;
@@ -50,12 +62,14 @@ export class PixelArtParksLayer {
     }
   };
 
-  constructor(options: { id?: string; source?: string; sourceLayer?: string } = {}) {
+  constructor(options: PixelArtParksLayerOptions = {}) {
     this.id = options.id || 'pixel-art-parks';
     this.type = 'custom';
     this.renderingMode = '3d';
     this.source = options.source || 'openmaptiles';
     this.sourceLayer = options.sourceLayer || 'park';
+    this.classProperty = options.classProperty || 'class';
+    this.classifyFn = options.classify || PixelArtParksLayer.defaultClassify;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -192,8 +206,11 @@ export class PixelArtParksLayer {
         if (feature.type !== 3) continue; // Only polygons
 
         const properties = feature.properties || {};
-        const parkClass = properties.class || '';
-        const parkType = this.classifyPark(parkClass);
+        const classValueRaw = properties[this.classProperty];
+        const classValue = classValueRaw == null ? '' : String(classValueRaw);
+        const parkType = this.sanitizeClassifyResult(
+          this.classifyFn(classValue, feature)
+        );
 
         const geometry = feature.loadGeometry();
         if (!geometry || geometry.length === 0) continue;
@@ -261,9 +278,14 @@ export class PixelArtParksLayer {
     console.log(`Loaded ${processedCount} park features, ${this.vertexCount} vertices`);
   }
 
-  private classifyPark(parkClass: string): number {
-    if (parkClass.includes('national') || parkClass.includes('nature')) return 0; // Nature reserve
-    if (parkClass.includes('protected')) return 1; // Protected area
+  private sanitizeClassifyResult(value: number): number {
+    return Number.isFinite(value) ? value : 2;
+  }
+
+  private static defaultClassify(parkClass: string): number {
+    const normalized = parkClass.toLowerCase();
+    if (normalized.includes('national') || normalized.includes('nature')) return 0; // Nature reserve
+    if (normalized.includes('protected')) return 1; // Protected area
     return 2; // Regular park
   }
 
@@ -384,7 +406,7 @@ export class PixelArtParksLayer {
     x: number,
     y: number,
     height: number,
-    parkType: number,
+    _parkType: number,
     staging: ParkMeshStaging
   ) {
     const groundZ = 0.4;

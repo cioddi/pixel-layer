@@ -1,10 +1,22 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import earcut from 'earcut';
 
 const MAPLIBRE_EXTENT = 8192;
 
 import vertexSource from '../shaders/pixel_landuse.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_landuse.frag.glsl?raw';
+
+export type LanduseClassifyFn = (classValue: string, feature: any) => number;
+export type LanduseFilterFn = (classValue: string, feature: any) => boolean;
+
+export interface PixelArtLanduseLayerOptions {
+  id?: string;
+  source?: string;
+  sourceLayer?: string;
+  classProperty?: string;
+  classify?: LanduseClassifyFn;
+  filter?: LanduseFilterFn;
+}
 
 interface LanduseMesh {
   key: string;
@@ -29,6 +41,9 @@ export class PixelArtLanduseLayer {
   renderingMode: '3d';
   source: string;
   sourceLayer: string;
+  classProperty: string;
+  classifyFn: LanduseClassifyFn;
+  filterFn: LanduseFilterFn;
 
   map?: maplibregl.Map;
   program?: WebGLProgram;
@@ -50,12 +65,15 @@ export class PixelArtLanduseLayer {
     }
   };
 
-  constructor(options: { id?: string; source?: string; sourceLayer?: string } = {}) {
+  constructor(options: PixelArtLanduseLayerOptions = {}) {
     this.id = options.id || 'pixel-art-landuse';
     this.type = 'custom';
     this.renderingMode = '3d';
     this.source = options.source || 'openmaptiles';
     this.sourceLayer = options.sourceLayer || 'landuse';
+    this.classProperty = options.classProperty || 'class';
+    this.classifyFn = options.classify || PixelArtLanduseLayer.defaultClassify;
+    this.filterFn = options.filter || PixelArtLanduseLayer.defaultFilter;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -190,11 +208,13 @@ export class PixelArtLanduseLayer {
         if (feature.type !== 3) continue; // Only polygons
 
         const properties = feature.properties || {};
-        const landuseClass = (properties.class || '').toString().toLowerCase();
+        const classValueRaw = properties[this.classProperty];
+        const classValue = classValueRaw == null ? '' : String(classValueRaw);
+        if (!this.filterFn(classValue, feature)) continue;
 
-        if (!this.isSupportedLanduse(landuseClass)) continue;
-
-        const landuseType = this.classifyLanduse(landuseClass);
+        const landuseType = this.sanitizeClassifyResult(
+          this.classifyFn(classValue, feature)
+        );
 
         const geometry = feature.loadGeometry();
         if (!geometry || geometry.length === 0) continue;
@@ -262,27 +282,33 @@ export class PixelArtLanduseLayer {
     console.log(`Loaded ${processedCount} landuse features, ${this.vertexCount} vertices`);
   }
 
-  private isSupportedLanduse(landuseClass: string): boolean {
-    return landuseClass.includes('grass') ||
-           landuseClass.includes('meadow') ||
-           landuseClass.includes('pasture') ||
-           landuseClass.includes('village_green') ||
-           landuseClass.includes('recreation') ||
-           landuseClass.includes('garden') ||
-           landuseClass.includes('allot') ||
-           landuseClass.includes('farmland') ||
-           landuseClass.includes('field') ||
-           landuseClass.includes('farm') ||
-           landuseClass.includes('crop') ||
-           landuseClass.includes('orchard') ||
-           landuseClass.includes('vineyard') ||
-           landuseClass.includes('plant_nursery');
+  private sanitizeClassifyResult(value: number): number {
+    return Number.isFinite(value) ? value : 0;
   }
 
-  private classifyLanduse(landuseClass: string): number {
-    if (landuseClass.includes('orchard') || landuseClass.includes('vineyard') || landuseClass.includes('plant_nursery')) return 3;
-    if (landuseClass.includes('farmland') || landuseClass.includes('field') || landuseClass.includes('farm') || landuseClass.includes('crop')) return 2;
-    if (landuseClass.includes('garden') || landuseClass.includes('allot') || landuseClass.includes('village_green') || landuseClass.includes('recreation')) return 1;
+  private static defaultFilter(landuseClass: string): boolean {
+    const normalized = landuseClass.toLowerCase();
+    return normalized.includes('grass') ||
+      normalized.includes('meadow') ||
+      normalized.includes('pasture') ||
+      normalized.includes('village_green') ||
+      normalized.includes('recreation') ||
+      normalized.includes('garden') ||
+      normalized.includes('allot') ||
+      normalized.includes('farmland') ||
+      normalized.includes('field') ||
+      normalized.includes('farm') ||
+      normalized.includes('crop') ||
+      normalized.includes('orchard') ||
+      normalized.includes('vineyard') ||
+      normalized.includes('plant_nursery');
+  }
+
+  private static defaultClassify(landuseClass: string): number {
+    const normalized = landuseClass.toLowerCase();
+    if (normalized.includes('orchard') || normalized.includes('vineyard') || normalized.includes('plant_nursery')) return 3;
+    if (normalized.includes('farmland') || normalized.includes('field') || normalized.includes('farm') || normalized.includes('crop')) return 2;
+    if (normalized.includes('garden') || normalized.includes('allot') || normalized.includes('village_green') || normalized.includes('recreation')) return 1;
     return 0;
   }
 

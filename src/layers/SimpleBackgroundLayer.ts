@@ -1,4 +1,4 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 
 const vertexSource = `
 attribute vec3 a_position;
@@ -124,7 +124,7 @@ export class SimpleBackgroundLayer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  onRemove(map: maplibregl.Map, gl: WebGLRenderingContext) {
+  onRemove(_map: maplibregl.Map, gl: WebGLRenderingContext) {
     if (this.program) gl.deleteProgram(this.program);
     if (this.buffer) gl.deleteBuffer(this.buffer);
   }

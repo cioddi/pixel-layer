@@ -1,6 +1,21 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import { createProgram, getLocations } from '../shaders/shaderUtils';
 import { BuildingClassifier } from '../rendering/BuildingClassifier';
+
+const DEFAULT_HEIGHT_PROPERTIES = ['render_height', 'height'];
+const DEFAULT_MIN_HEIGHT_PROPERTIES = ['render_min_height', 'min_height'];
+
+export type ComplexBuildingClassifierFn = (properties: Record<string, any>) => number;
+
+export interface PixelArtBuildingsLayerOptions {
+  id?: string;
+  sourceLayer?: string;
+  source?: string;
+  heightProperty?: string | string[];
+  minHeightProperty?: string | string[];
+  defaultHeight?: number;
+  classify?: ComplexBuildingClassifierFn;
+}
 
 const vertexShaderSource = `
 attribute vec3 a_position;
@@ -45,16 +60,11 @@ void main() {
 }
 `;
 
-interface LayerOptions {
-  id?: string;
-  sourceLayer?: string;
-  source?: string;
-}
-
 interface Building {
   footprint: number[][]; // [lng, lat]
   height: number; // raw height in meters
   type: number;
+  minHeight: number;
 }
 
 export class PixelArtBuildingsLayer {
@@ -73,13 +83,21 @@ export class PixelArtBuildingsLayer {
   normalBuffer?: WebGLBuffer;
   typeBuffer?: WebGLBuffer;
   vertexCount: number;
+  heightPropertyKeys: string[];
+  minHeightPropertyKeys: string[];
+  defaultHeight: number;
+  classifyFn: ComplexBuildingClassifierFn;
 
-  constructor(options: LayerOptions = {}) {
+  constructor(options: PixelArtBuildingsLayerOptions = {}) {
     this.id = options.id || 'pixel-art-buildings';
     this.type = 'custom';
     this.renderingMode = '3d';
     this.sourceLayer = options.sourceLayer || 'building';
     this.source = options.source || 'openmaptiles';
+    this.heightPropertyKeys = this.normalizePropertyKeys(options.heightProperty, DEFAULT_HEIGHT_PROPERTIES);
+    this.minHeightPropertyKeys = this.normalizePropertyKeys(options.minHeightProperty, DEFAULT_MIN_HEIGHT_PROPERTIES);
+    this.defaultHeight = options.defaultHeight ?? 20;
+    this.classifyFn = options.classify || BuildingClassifier.classify;
 
     this.buildings = [];
     this.geometryNeedsUpdate = false;
@@ -142,7 +160,7 @@ export class PixelArtBuildingsLayer {
   processFeature(feature: any): Building {
     const coords = feature.geometry.coordinates[0];
 
-    const rawHeight = feature.properties.render_height ?? feature.properties.height ?? 20;
+    const { base, top } = this.getHeights(feature.properties || {});
 
     // Store just lng/lat
     const footprint = coords.map(([lng, lat]: [number, number]) => {
@@ -151,16 +169,49 @@ export class PixelArtBuildingsLayer {
 
     if (this.buildings.length === 0) {
       console.log('First building sample:', {
-        'rawHeight': rawHeight,
+        'base': base,
+        'top': top,
         'sampleCoord': footprint[0]
       });
     }
 
     return {
       footprint,
-      height: rawHeight,
-      type: BuildingClassifier.classify(feature.properties)
+      height: top,
+      minHeight: base,
+      type: this.classifyFn(feature.properties || {})
     };
+  }
+
+  private getHeights(properties: Record<string, any>): { base: number; top: number } {
+    const minRaw = this.resolveProperty(properties, this.minHeightPropertyKeys);
+    const maxRaw = this.resolveProperty(properties, this.heightPropertyKeys);
+    const base = Number(minRaw ?? 0) || 0;
+    let top = Number(maxRaw);
+    if (!Number.isFinite(top)) {
+      top = base + this.defaultHeight;
+    }
+    if (top <= base) {
+      top = base + Math.max(1, this.defaultHeight);
+    }
+    return { base, top };
+  }
+
+  private resolveProperty(props: Record<string, any>, keys: string[]): unknown {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(props, key)) {
+        const value = props[key];
+        if (value !== undefined && value !== null && value !== '') {
+          return value;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private normalizePropertyKeys(input: string | string[] | undefined, fallback: string[]): string[] {
+    if (!input) return [...fallback];
+    return Array.isArray(input) ? input : [input];
   }
 
   updateBuffers() {

@@ -1,10 +1,20 @@
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import earcut from 'earcut';
 
 const MAPLIBRE_EXTENT = 8192;
 
 import vertexSource from '../shaders/pixel_water.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_water.frag.glsl?raw';
+
+export type WaterClassifyFn = (classValue: string, feature: any) => number;
+
+export interface PixelArtWaterLayerOptions {
+  id?: string;
+  source?: string;
+  sourceLayer?: string;
+  classProperty?: string;
+  classify?: WaterClassifyFn;
+}
 
 interface WaterMesh {
   key: string;
@@ -29,6 +39,8 @@ export class PixelArtWaterLayer {
   renderingMode: '3d';
   source: string;
   sourceLayer: string;
+  classProperty: string;
+  classifyFn: WaterClassifyFn;
 
   map?: maplibregl.Map;
   program?: WebGLProgram;
@@ -53,12 +65,14 @@ export class PixelArtWaterLayer {
     }
   };
 
-  constructor(options: { id?: string; source?: string; sourceLayer?: string } = {}) {
+  constructor(options: PixelArtWaterLayerOptions = {}) {
     this.id = options.id || 'pixel-art-water';
     this.type = 'custom';
     this.renderingMode = '3d';
     this.source = options.source || 'openmaptiles';
     this.sourceLayer = options.sourceLayer || 'water';
+    this.classProperty = options.classProperty || 'class';
+    this.classifyFn = options.classify || PixelArtWaterLayer.defaultClassify;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -208,9 +222,11 @@ export class PixelArtWaterLayer {
       for (let i = 0; i < vtLayer.length; i++) {
         const feature = vtLayer.feature(i);
         const properties = feature.properties || {};
-
-        // Determine water type (0 = lake/ocean, 1 = river)
-        const waterType = properties.class === 'river' || properties.class === 'stream' ? 1 : 0;
+        const classValueRaw = properties[this.classProperty];
+        const classValue = classValueRaw == null ? '' : String(classValueRaw);
+        const waterType = this.sanitizeClassifyResult(
+          this.classifyFn(classValue, feature)
+        );
 
         if (feature.type === 3) {
           // Polygon (lakes, oceans)
@@ -335,6 +351,15 @@ export class PixelArtWaterLayer {
       if (mesh.waterTypeBuffer) gl.deleteBuffer(mesh.waterTypeBuffer);
     }
     this.waterMeshes.clear();
+  }
+
+  private sanitizeClassifyResult(value: number): number {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private static defaultClassify(waterClass: string): number {
+    const normalized = waterClass.toLowerCase();
+    return normalized === 'river' || normalized === 'stream' ? 1 : 0;
   }
 
   private compileShader(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
