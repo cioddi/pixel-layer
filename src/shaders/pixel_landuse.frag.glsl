@@ -3,6 +3,8 @@ precision mediump float;
 varying vec3 v_worldPos;
 varying float v_landuseType;
 
+uniform float u_zoom;
+
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
@@ -123,14 +125,26 @@ void main() {
   }
 
   // Ground/landuse rendering
-  if (v_landuseType < 0.5) {
-    color = meadow(pos);
-  } else if (v_landuseType < 1.5) {
-    color = garden(pos);
-  } else if (v_landuseType < 2.5) {
-    color = farmland(pos);
+  if (u_zoom < 8.0) {
+    if (v_landuseType < 0.5) {
+      color = vec3(0.45, 0.70, 0.45);
+    } else if (v_landuseType < 1.5) {
+      color = vec3(0.60, 0.78, 0.50);
+    } else if (v_landuseType < 2.5) {
+      color = vec3(0.72, 0.84, 0.54);
+    } else {
+      color = vec3(0.82, 0.88, 0.58);
+    }
   } else {
-    color = orchard(pos);
+    if (v_landuseType < 0.5) {
+      color = meadow(pos);
+    } else if (v_landuseType < 1.5) {
+      color = garden(pos);
+    } else if (v_landuseType < 2.5) {
+      color = farmland(pos);
+    } else {
+      color = orchard(pos);
+    }
   }
   gl_FragColor = vec4(color, 1.0);
 }

@@ -1,5 +1,10 @@
 import type maplibregl from 'maplibre-gl';
-import earcut from 'earcut';
+import Point from '@mapbox/point-geometry';
+
+import { classifyRings } from '@maplibre/maplibre-gl-style-spec';
+
+import { getCanonicalTileID, loadNormalizedGeometry } from '../utils/vectorTile';
+import { getFillGranularity, subdividePolygon } from '../utils/subdivision';
 
 const MAPLIBRE_EXTENT = 8192;
 
@@ -16,6 +21,7 @@ export interface PixelArtLanduseLayerOptions {
   classProperty?: string;
   classify?: LanduseClassifyFn;
   filter?: LanduseFilterFn;
+  enableTrees?: boolean;
 }
 
 interface LanduseMesh {
@@ -51,10 +57,12 @@ export class PixelArtLanduseLayer {
   aNormal?: number;
   aLanduseType?: number;
   uMatrix?: WebGLUniformLocation | null;
+  uZoom?: WebGLUniformLocation | null;
 
   vertexCount = 0;
   needsUpdate = true;
   landuseMeshes: Map<string, LanduseMesh> = new Map();
+  enableTrees: boolean;
 
   private handleSourceData = (e: any) => {
     if (e.sourceId === this.source) {
@@ -74,6 +82,7 @@ export class PixelArtLanduseLayer {
     this.classProperty = options.classProperty || 'class';
     this.classifyFn = options.classify || PixelArtLanduseLayer.defaultClassify;
     this.filterFn = options.filter || PixelArtLanduseLayer.defaultFilter;
+    this.enableTrees = options.enableTrees ?? false;
   }
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext) {
@@ -98,6 +107,7 @@ export class PixelArtLanduseLayer {
     this.aNormal = gl.getAttribLocation(program, 'a_normal');
     this.aLanduseType = gl.getAttribLocation(program, 'a_landuseType');
     this.uMatrix = gl.getUniformLocation(program, 'u_posMatrix');
+    this.uZoom = gl.getUniformLocation(program, 'u_zoom');
 
     map.on('sourcedata', this.handleSourceData);
   }
@@ -129,7 +139,7 @@ export class PixelArtLanduseLayer {
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    gl.depthMask(true); // Write to depth buffer for proper layering
+    gl.depthMask(false); // Don't write to depth buffer - draw order determines visibility
     gl.disable(gl.CULL_FACE); // Disable culling - ground needs to be visible from above
     gl.disable(gl.BLEND); // Fully opaque
 
@@ -139,6 +149,9 @@ export class PixelArtLanduseLayer {
         const posMatrix64 = (this.map as any).transform.calculatePosMatrix(mesh.tileID, false, true);
         const posMatrix = posMatrix64 instanceof Float32Array ? posMatrix64 : new Float32Array(posMatrix64);
         gl.uniformMatrix4fv(this.uMatrix, false, posMatrix);
+        if (this.uZoom) {
+          gl.uniform1f(this.uZoom, this.map.getZoom());
+        }
       }
 
       gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vertexBuffer);
@@ -186,9 +199,9 @@ export class PixelArtLanduseLayer {
       const vtLayer = vtLayers?.[this.sourceLayer];
       if (!vtLayer) continue;
 
-      const extent = vtLayer.extent || 4096;
       const tileID = tile.tileID;
-      const scaleFactor = MAPLIBRE_EXTENT / extent;
+      const canonical = getCanonicalTileID(tileID);
+      const granularity = getFillGranularity(canonical.z);
       const tileIDClone = typeof tileID.clone === 'function' ? tileID.clone() : tileID;
       const tileKey = tileID.key;
 
@@ -216,10 +229,10 @@ export class PixelArtLanduseLayer {
           this.classifyFn(classValue, feature)
         );
 
-        const geometry = feature.loadGeometry();
+        const geometry = loadNormalizedGeometry(feature);
         if (!geometry || geometry.length === 0) continue;
 
-        this.processPolygon(geometry, landuseType, scaleFactor, staging);
+        this.processGeometry(geometry, landuseType, staging, canonical, granularity);
         processedCount++;
       }
     }
@@ -312,69 +325,55 @@ export class PixelArtLanduseLayer {
     return 0;
   }
 
-  private processPolygon(
+  private processGeometry(
     geometry: Array<Array<{ x: number; y: number }>>,
     landuseType: number,
-    scaleFactor: number,
-    staging: LanduseMeshStaging
+    staging: LanduseMeshStaging,
+    canonical: { z: number; x: number; y: number },
+    granularity: number
   ) {
-    const z = 0.35; // Just above water, below parks
+    const z = 0.5; // Ground level - same as other ground layers
+    const polygons = classifyRings(geometry, 500);
 
-    // Outer ring
-    const outerRing = geometry[0];
-    if (!outerRing || outerRing.length < 3) return;
+    for (const polygon of polygons) {
+      if (!polygon.length) continue;
 
-    // Convert to flat array for earcut
-    const coords: number[] = [];
-    const holes: number[] = [];
+      const polygonPoints = polygon.map((ring) => ring.map(({ x, y }) => new Point(x, y)));
+      const subdivided = subdividePolygon(polygonPoints, canonical, granularity, false);
+      const verts = subdivided.verticesFlattened;
+      const indices = subdivided.indicesTriangles;
 
-    for (const point of outerRing) {
-      coords.push(point.x * scaleFactor, point.y * scaleFactor);
-    }
+      for (let i = 0; i < indices.length; i += 3) {
+        const i0 = indices[i] * 2;
+        const i1 = indices[i + 1] * 2;
+        const i2 = indices[i + 2] * 2;
 
-    // Add holes if present
-    for (let i = 1; i < geometry.length; i++) {
-      holes.push(coords.length / 2);
-      for (const point of geometry[i]) {
-        coords.push(point.x * scaleFactor, point.y * scaleFactor);
+        staging.vertices.push(
+          verts[i0], verts[i0 + 1], z,
+          verts[i1], verts[i1 + 1], z,
+          verts[i2], verts[i2 + 1], z
+        );
+        staging.normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+        staging.landuseTypes.push(landuseType, landuseType, landuseType);
       }
-    }
 
-    // Triangulate
-    const indices = earcut(coords, holes.length > 0 ? holes : undefined, 2);
-
-    // Add triangles
-    for (let i = 0; i < indices.length; i += 3) {
-      const i0 = indices[i] * 2;
-      const i1 = indices[i + 1] * 2;
-      const i2 = indices[i + 2] * 2;
-
-      staging.vertices.push(
-        coords[i0], coords[i0 + 1], z,
-        coords[i1], coords[i1 + 1], z,
-        coords[i2], coords[i2 + 1], z
-      );
-      staging.normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
-      staging.landuseTypes.push(landuseType, landuseType, landuseType);
-    }
-
-    // Add trees for appropriate landuse types (only at higher zoom levels)
-    if (this.map && this.map.getZoom() >= 12) {
-      this.addTrees(outerRing, scaleFactor, landuseType, staging);
+      const exterior = polygon[0];
+      if (this.enableTrees && exterior && exterior.length && this.map && this.map.getZoom() >= 12) {
+        this.addTrees(exterior, landuseType, staging);
+      }
     }
   }
 
   private addTrees(
     ring: Array<{ x: number; y: number }>,
-    scaleFactor: number,
     landuseType: number,
     staging: LanduseMeshStaging
   ) {
     // Calculate bounding box
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const point of ring) {
-      const x = point.x * scaleFactor;
-      const y = point.y * scaleFactor;
+      const x = point.x;
+      const y = point.y;
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
       maxX = Math.max(maxX, x);
@@ -385,8 +384,15 @@ export class PixelArtLanduseLayer {
     const height = maxY - minY;
     const area = width * height;
 
-    // Skip very small areas
     if (area < 1500) return;
+
+    const zoom = this.map?.getZoom() ?? 0;
+    if (zoom <= 8) return;
+
+    if (width >= MAPLIBRE_EXTENT || height >= MAPLIBRE_EXTENT) return;
+
+    const maxArea = MAPLIBRE_EXTENT * MAPLIBRE_EXTENT * 0.1;
+    if (area > maxArea) return;
 
     // Tree spacing, density, and variety based on landuse type
     let spacing = 60;
@@ -437,7 +443,7 @@ export class PixelArtLanduseLayer {
         if (hash < density) continue;
 
         // Check if point is inside polygon
-        if (!this.pointInPolygon(gridX, gridY, ring, scaleFactor)) continue;
+        if (!this.pointInPolygon(gridX, gridY, ring)) continue;
 
         // Add some variation to position
         const offsetX = (hash * 2 - 1) * spacing * 0.25;
@@ -485,7 +491,7 @@ export class PixelArtLanduseLayer {
     treeType: number,
     staging: LanduseMeshStaging
   ) {
-    const groundZ = 0.35;
+    const groundZ = 0.5;
     const trunkHeight = height * 0.4;
     const trunkRadius = 1.5;
     const foliageRadius = 3.5;
@@ -585,15 +591,14 @@ export class PixelArtLanduseLayer {
   private pointInPolygon(
     px: number,
     py: number,
-    ring: Array<{ x: number; y: number }>,
-    scaleFactor: number
+    ring: Array<{ x: number; y: number }>
   ): boolean {
     let inside = false;
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const xi = ring[i].x * scaleFactor;
-      const yi = ring[i].y * scaleFactor;
-      const xj = ring[j].x * scaleFactor;
-      const yj = ring[j].y * scaleFactor;
+      const xi = ring[i].x;
+      const yi = ring[i].y;
+      const xj = ring[j].x;
+      const yj = ring[j].y;
 
       const intersect = ((yi > py) !== (yj > py)) &&
         (px < (xj - xi) * (py - yi) / (yj - yi) + xi);

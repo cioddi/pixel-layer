@@ -1,7 +1,9 @@
 import type maplibregl from 'maplibre-gl';
-import earcut from 'earcut';
+import Point from '@mapbox/point-geometry';
+import { classifyRings } from '@maplibre/maplibre-gl-style-spec';
 
-const MAPLIBRE_EXTENT = 8192;
+import { getCanonicalTileID, loadNormalizedGeometry } from '../utils/vectorTile';
+import { getFillGranularity, subdividePolygon } from '../utils/subdivision';
 
 import vertexSource from '../shaders/pixel_water.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_water.frag.glsl?raw';
@@ -145,7 +147,7 @@ export class PixelArtWaterLayer {
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    gl.depthMask(true); // Write to depth buffer for proper layering
+    gl.depthMask(false); // Don't write to depth buffer - draw order determines visibility
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.BLEND); // Fully opaque now
 
@@ -202,9 +204,9 @@ export class PixelArtWaterLayer {
       const vtLayer = vtLayers?.[this.sourceLayer];
       if (!vtLayer) continue;
 
-      const extent = vtLayer.extent || 4096;
       const tileID = tile.tileID;
-      const scaleFactor = MAPLIBRE_EXTENT / extent;
+      const canonical = getCanonicalTileID(tileID);
+      const granularity = getFillGranularity(canonical.z);
       const tileIDClone = typeof tileID.clone === 'function' ? tileID.clone() : tileID;
       const tileKey = tileID.key;
 
@@ -229,11 +231,10 @@ export class PixelArtWaterLayer {
         );
 
         if (feature.type === 3) {
-          // Polygon (lakes, oceans)
-          const geometry = feature.loadGeometry();
-          if (!geometry || geometry.length === 0) continue;
+        const geometry = loadNormalizedGeometry(feature);
+        if (!geometry || geometry.length === 0) continue;
 
-          this.processPolygon(geometry, waterType, scaleFactor, staging);
+        this.processGeometry(geometry, waterType, staging, canonical, granularity);
           processedCount++;
         }
         // Skip linestrings (rivers/streams)
@@ -298,50 +299,36 @@ export class PixelArtWaterLayer {
     console.log(`Loaded ${processedCount} water features, ${this.vertexCount} vertices`);
   }
 
-  private processPolygon(
+  private processGeometry(
     geometry: Array<Array<{ x: number; y: number }>>,
     waterType: number,
-    scaleFactor: number,
-    staging: WaterMeshStaging
+    staging: WaterMeshStaging,
+    canonical: { z: number; x: number; y: number },
+    granularity: number
   ) {
-    const z = 0.3; // Just above ground, below roads
+    const z = 0.5; // Same z as all ground layers - draw order determines visibility
+    const polygons = classifyRings(geometry, 500);
+    for (const polygon of polygons) {
+      if (!polygon.length) continue;
 
-    // Outer ring
-    const outerRing = geometry[0];
-    if (!outerRing || outerRing.length < 3) return;
+      const polygonPoints = polygon.map((ring) => ring.map(({ x, y }) => new Point(x, y)));
+      const subdivided = subdividePolygon(polygonPoints, canonical, granularity, false);
+      const verts = subdivided.verticesFlattened;
+      const indices = subdivided.indicesTriangles;
 
-    // Convert to flat array for earcut
-    const coords: number[] = [];
-    const holes: number[] = [];
+      for (let i = 0; i < indices.length; i += 3) {
+        const i0 = indices[i] * 2;
+        const i1 = indices[i + 1] * 2;
+        const i2 = indices[i + 2] * 2;
 
-    for (const point of outerRing) {
-      coords.push(point.x * scaleFactor, point.y * scaleFactor);
-    }
-
-    // Add holes if present
-    for (let i = 1; i < geometry.length; i++) {
-      holes.push(coords.length / 2);
-      for (const point of geometry[i]) {
-        coords.push(point.x * scaleFactor, point.y * scaleFactor);
+        staging.vertices.push(
+          verts[i0], verts[i0 + 1], z,
+          verts[i1], verts[i1 + 1], z,
+          verts[i2], verts[i2 + 1], z
+        );
+        staging.normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+        staging.waterTypes.push(waterType, waterType, waterType);
       }
-    }
-
-    // Triangulate
-    const indices = earcut(coords, holes.length > 0 ? holes : undefined, 2);
-
-    // Add triangles
-    for (let i = 0; i < indices.length; i += 3) {
-      const i0 = indices[i] * 2;
-      const i1 = indices[i + 1] * 2;
-      const i2 = indices[i + 2] * 2;
-
-      staging.vertices.push(
-        coords[i0], coords[i0 + 1], z,
-        coords[i1], coords[i1 + 1], z,
-        coords[i2], coords[i2 + 1], z
-      );
-      staging.normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
-      staging.waterTypes.push(waterType, waterType, waterType);
     }
   }
   private disposeMeshes(gl: WebGLRenderingContext) {

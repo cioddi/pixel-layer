@@ -1,6 +1,6 @@
 import type maplibregl from 'maplibre-gl';
 
-const MAPLIBRE_EXTENT = 8192;
+import { loadNormalizedGeometry } from '../utils/vectorTile';
 
 import vertexSource from '../shaders/pixel_roads.vert.glsl?raw';
 import fragmentSource from '../shaders/pixel_roads.frag.glsl?raw';
@@ -119,10 +119,6 @@ export class PixelArtRoadsLayer {
   render(gl: WebGLRenderingContext, _matrix: any) {
     if (!this.program || !this.map) return;
 
-    // Skip rendering at very low zoom levels for performance
-    const zoom = this.map.getZoom();
-    if (zoom < 4) return;
-
     if (this.needsUpdate) {
       this.updateGeometry(gl);
     }
@@ -193,9 +189,7 @@ export class PixelArtRoadsLayer {
       const vtLayer = vtLayers?.[this.sourceLayer];
       if (!vtLayer) continue;
 
-      const extent = vtLayer.extent || 4096;
       const tileID = tile.tileID;
-      const scaleFactor = MAPLIBRE_EXTENT / extent;
       const tileIDClone = typeof tileID.clone === 'function' ? tileID.clone() : tileID;
       const tileKey = tileID.key;
 
@@ -222,13 +216,14 @@ export class PixelArtRoadsLayer {
           this.classifyFn(classValue, feature)
         );
 
-        const geometry = feature.loadGeometry();
+        const geometry = loadNormalizedGeometry(feature);
         if (!geometry || geometry.length === 0) continue;
 
         for (const line of geometry) {
           if (line.length < 2) continue;
 
-          this.extrudeLine(line, roadType, scaleFactor, staging);
+          const zoom = this.map?.getZoom() ?? 16;
+          this.extrudeLine(line, roadType, staging, zoom);
           processedCount++;
         }
       }
@@ -314,47 +309,73 @@ export class PixelArtRoadsLayer {
   private extrudeLine(
     line: Array<{ x: number; y: number }>,
     roadType: number,
-    scaleFactor: number,
-    staging: RoadMeshStaging
+    staging: RoadMeshStaging,
+    zoom: number
   ) {
     if (line.length < 2) return;
 
-    // Road width based on type (even wider!)
-    let width = 30.0; // meters
-    if (roadType === 0) width = 60.0; // Highway - extra wide
-    else if (roadType === 1) width = 45.0; // Primary - very wide
-    else if (roadType === 2) width = 30.0; // Secondary
-    else width = 20.0; // Residential
+    // Base road width based on type
+    let baseWidth = 30.0; // meters
+    if (roadType === 0) baseWidth = 60.0; // Highway - extra wide
+    else if (roadType === 1) baseWidth = 45.0; // Primary - very wide
+    else if (roadType === 2) baseWidth = 30.0; // Secondary
+    else baseWidth = 20.0; // Residential
 
+    // Scale width based on zoom level (much thinner at low zoom)
+    let widthScale = 1.0;
+    if (zoom < 10) {
+      // Linear scale from 0.1 at zoom 0 to 1.0 at zoom 10
+      widthScale = 0.1 + (zoom / 10) * 0.9;
+    }
+
+    const width = baseWidth * widthScale;
     const z = 0.5; // Slightly above ground to avoid z-fighting with terrain
     const halfWidth = width / 2;
     let distanceAlong = 0.0;
 
+    // Simplify line at low zoom levels by decimating the array first
+    let simplifiedLine = line;
+    if (zoom < 10) {
+      const step = Math.max(2, Math.floor(12 - zoom));
+      simplifiedLine = [];
+      for (let i = 0; i < line.length; i += step) {
+        simplifiedLine.push(line[i]);
+      }
+      // Always include the last point
+      if (simplifiedLine.length > 0 && simplifiedLine[simplifiedLine.length - 1] !== line[line.length - 1]) {
+        simplifiedLine.push(line[line.length - 1]);
+      }
+      // Need at least 2 points
+      if (simplifiedLine.length < 2) {
+        simplifiedLine = [line[0], line[line.length - 1]];
+      }
+    }
+
     // Pre-calculate all point positions and normals
     const points: Array<{ x: number; y: number; nx: number; ny: number }> = [];
 
-    for (let i = 0; i < line.length; i++) {
-      const p = line[i];
-      const x = p.x * scaleFactor;
-      const y = p.y * scaleFactor;
+    for (let i = 0; i < simplifiedLine.length; i++) {
+      const p = simplifiedLine[i];
+      const x = p.x;
+      const y = p.y;
 
       let nx = 0, ny = 0;
 
       if (i === 0) {
         // First point - use direction to next point
-        const next = line[i + 1];
-        const dx = (next.x * scaleFactor) - x;
-        const dy = (next.y * scaleFactor) - y;
+        const next = simplifiedLine[i + 1];
+        const dx = (next.x) - x;
+        const dy = (next.y) - y;
         const len = Math.sqrt(dx * dx + dy * dy);
         if (len > 0) {
           nx = -dy / len;
           ny = dx / len;
         }
-      } else if (i === line.length - 1) {
+      } else if (i === simplifiedLine.length - 1) {
         // Last point - use direction from previous point
-        const prev = line[i - 1];
-        const dx = x - (prev.x * scaleFactor);
-        const dy = y - (prev.y * scaleFactor);
+        const prev = simplifiedLine[i - 1];
+        const dx = x - (prev.x);
+        const dy = y - (prev.y);
         const len = Math.sqrt(dx * dx + dy * dy);
         if (len > 0) {
           nx = -dy / len;
@@ -362,15 +383,15 @@ export class PixelArtRoadsLayer {
         }
       } else {
         // Middle point - average of both directions for smooth join
-        const prev = line[i - 1];
-        const next = line[i + 1];
+        const prev = simplifiedLine[i - 1];
+        const next = simplifiedLine[i + 1];
 
-        const dx1 = x - (prev.x * scaleFactor);
-        const dy1 = y - (prev.y * scaleFactor);
+        const dx1 = x - (prev.x);
+        const dy1 = y - (prev.y);
         const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
 
-        const dx2 = (next.x * scaleFactor) - x;
-        const dy2 = (next.y * scaleFactor) - y;
+        const dx2 = (next.x) - x;
+        const dy2 = (next.y) - y;
         const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
 
         if (len1 > 0 && len2 > 0) {

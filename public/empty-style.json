@@ -18,12 +18,12 @@
       }
     },
     {
-      "id": "building",
+      "id": "water-placeholder",
       "type": "fill",
       "source": "openmaptiles",
-      "source-layer": "building",
+      "source-layer": "water",
       "paint": {
-        "fill-color": "#dfdbd7",
+        "fill-color": "#4f90d8",
         "fill-opacity": 0,
         "fill-antialias": true
       }

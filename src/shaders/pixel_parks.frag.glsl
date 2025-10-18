@@ -3,186 +3,141 @@ precision mediump float;
 varying vec3 v_worldPos;
 varying float v_parkType;
 
-// Pixel size for grass texture
-const float PIXEL_SIZE = 2.5;
+uniform float u_zoom;
 
-// Hash function for procedural randomness
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-// Get base grass color based on park type
-vec3 parkBaseColor(float type) {
-  // Tree foliage
-  if (type < -1.5) {
-    return vec3(0.20, 0.45, 0.25); // Dark green foliage
-  }
-  // Tree trunk
-  if (type < -0.5) {
-    return vec3(0.35, 0.25, 0.15); // Brown trunk
+// Nature reserve - dense, wild vegetation
+vec3 natureReserve(vec2 pos) {
+  vec3 base = vec3(0.24, 0.48, 0.28);
+
+  // Dense vegetation patches
+  vec2 cell = floor(pos / 24.0);
+  float variation = hash(cell * 1.5);
+  base *= mix(0.75, 1.2, variation);
+
+  // Wild grass texture
+  vec2 pixel = floor(pos / 5.0);
+  float grass = hash(pixel * 2.3);
+  if (grass > 0.7) {
+    base *= 1.2;
   }
 
-  if (type < 0.5) {
-    // Nature reserve - darker, wilder green
-    return vec3(0.25, 0.45, 0.30);
-  } else if (type < 1.5) {
-    // Protected area - medium green
-    return vec3(0.30, 0.50, 0.35);
+  // Wild flowers scattered
+  vec2 flowerCell = floor(pos / 40.0);
+  float flowerSeed = hash(flowerCell * 3.1);
+  if (flowerSeed > 0.94) {
+    vec3 wildFlower;
+    float choice = hash(flowerCell * 4.7);
+    if (choice > 0.5) wildFlower = vec3(0.75, 0.65, 0.85); // Purple
+    else wildFlower = vec3(0.95, 0.85, 0.35); // Yellow
+    base = mix(base, wildFlower, 0.25);
   }
-  // Regular park - lighter green
-  return vec3(0.35, 0.55, 0.40);
+
+  return base;
 }
 
-// Grass blade pattern
-float grassPattern(vec2 pos) {
-  vec2 pixelPos = floor(pos / PIXEL_SIZE);
-  float h = hash(pixelPos);
+// Protected area - maintained but natural
+vec3 protectedArea(vec2 pos) {
+  vec3 base = vec3(0.28, 0.54, 0.32);
 
-  // Random grass blades (vertical strokes)
-  if (h > 0.7) {
-    float subHash = hash(pixelPos * 1.7);
-    if (subHash > 0.6) {
-      return 1.0; // Lighter grass blade
-    }
+  // Maintained grass
+  vec2 cell = floor(pos / 28.0);
+  float variation = hash(cell * 1.7);
+  base *= mix(0.85, 1.15, variation);
+
+  // Neat grass blades
+  vec2 pixel = floor(pos / 6.0);
+  float blade = hash(pixel * 2.5);
+  if (blade > 0.8) {
+    base *= 1.12;
   }
 
-  return 0.0;
+  // Sparse flowers
+  vec2 flowerCell = floor(pos / 52.0);
+  float flowerSeed = hash(flowerCell * 2.9);
+  if (flowerSeed > 0.95) {
+    vec3 flowerColor = vec3(0.9, 0.75, 0.4);
+    base = mix(base, flowerColor, 0.3);
+  }
+
+  return base;
 }
 
-// Dirt patches (post-apocalyptic worn areas)
-float dirtPatch(vec2 pos) {
-  vec2 cellPos = floor(pos / (PIXEL_SIZE * 8.0));
-  float h = hash(cellPos);
+// Regular park - well-maintained, recreational
+vec3 regularPark(vec2 pos) {
+  vec3 base = vec3(0.32, 0.58, 0.36);
 
-  // Sparse dirt patches
-  if (h > 0.92) {
-    vec2 localPos = mod(pos, PIXEL_SIZE * 8.0);
-    vec2 center = vec2(PIXEL_SIZE * 4.0, PIXEL_SIZE * 4.0);
-    float dist = length(localPos - center);
+  // Even grass coverage
+  vec2 cell = floor(pos / 32.0);
+  float variation = hash(cell * 1.9);
+  base *= mix(0.9, 1.1, variation);
 
-    if (dist < PIXEL_SIZE * 3.0) {
-      return 1.0 - (dist / (PIXEL_SIZE * 3.0));
-    }
+  // Manicured grass
+  vec2 pixel = floor(pos / 7.0);
+  float grass = hash(pixel * 2.7);
+  if (grass > 0.85) {
+    base *= 1.08;
   }
 
-  return 0.0;
-}
-
-// Dead/brown grass patches (overgrown, neglected)
-float deadGrassPattern(vec2 pos) {
-  vec2 cellPos = floor(pos / (PIXEL_SIZE * 6.0));
-  float h = hash(cellPos);
-
-  // Brown/dead grass patches
-  if (h > 0.88) {
-    vec2 localPos = mod(pos, PIXEL_SIZE * 6.0);
-    vec2 center = vec2(PIXEL_SIZE * 3.0, PIXEL_SIZE * 3.0);
-    float dist = length(localPos - center);
-
-    if (dist < PIXEL_SIZE * 2.5) {
-      return 1.0 - (dist / (PIXEL_SIZE * 2.5));
-    }
+  // Decorative flowers
+  vec2 flowerCell = floor(pos / 45.0);
+  float flowerSeed = hash(flowerCell * 3.3);
+  if (flowerSeed > 0.93) {
+    vec3 flowerColor;
+    float choice = hash(flowerCell * 5.9);
+    if (choice > 0.66) flowerColor = vec3(0.95, 0.3, 0.35); // Red
+    else if (choice > 0.33) flowerColor = vec3(0.85, 0.45, 0.75); // Pink
+    else flowerColor = vec3(0.95, 0.95, 0.4); // Yellow
+    base = mix(base, flowerColor, 0.35);
   }
 
-  return 0.0;
-}
-
-// Weeds and wild plants (taller, darker spots)
-float weedPattern(vec2 pos) {
-  vec2 pixelPos = floor(pos / (PIXEL_SIZE * 1.5));
-  float h = hash(pixelPos);
-
-  // Random weed clumps
-  if (h > 0.94) {
-    float subHash = hash(pixelPos * 2.1);
-    if (subHash > 0.5) {
-      return 1.0;
-    }
-  }
-
-  return 0.0;
-}
-
-// Wildflower spots (small colorful pixels)
-vec3 wildflowerPattern(vec2 pos) {
-  vec2 pixelPos = floor(pos / (PIXEL_SIZE * 3.0));
-  float h = hash(pixelPos);
-
-  // Very sparse wildflowers
-  if (h > 0.96) {
-    float colorHash = hash(pixelPos * 3.3);
-
-    // Different flower colors
-    if (colorHash > 0.75) {
-      return vec3(0.9, 0.8, 0.3); // Yellow flowers
-    } else if (colorHash > 0.5) {
-      return vec3(0.8, 0.4, 0.7); // Purple/pink flowers
-    } else if (colorHash > 0.25) {
-      return vec3(0.9, 0.9, 0.9); // White flowers
-    } else {
-      return vec3(0.7, 0.3, 0.3); // Red flowers
-    }
-  }
-
-  return vec3(0.0);
+  return base;
 }
 
 void main() {
-  vec2 worldPos2D = v_worldPos.xy;
-  vec3 baseColor = parkBaseColor(v_parkType);
-
-  // Apply pixelated position
-  vec2 pixelatedPos = floor(worldPos2D / PIXEL_SIZE) * PIXEL_SIZE;
-
-  vec3 color = baseColor;
+  vec2 pos = v_worldPos.xy;
+  vec3 color;
 
   // Trees (trunk and foliage) get simple rendering
-  if (v_parkType < -0.5) {
-    // Add some variation to tree color
-    float variation = hash(pixelatedPos * 0.1) * 0.15;
-    color = color * (0.9 + variation);
+  if (v_parkType < -1.5) {
+    // Type -2: Green foliage
+    color = vec3(0.18, 0.40, 0.22);
+    float variation = hash(floor(pos / 5.0)) * 0.15;
+    color = color * (0.85 + variation);
+    gl_FragColor = vec4(color, 1.0);
+    return;
+  } else if (v_parkType < -0.5) {
+    // Type -1: Brown trunk
+    color = vec3(0.36, 0.26, 0.17);
+    float variation = hash(floor(pos / 5.0)) * 0.15;
+    color = color * (0.85 + variation);
     gl_FragColor = vec4(color, 1.0);
     return;
   }
 
-  // Ground/grass rendering
-  // Apply dirt patches (brown spots)
-  float dirt = dirtPatch(worldPos2D);
-  if (dirt > 0.0) {
-    vec3 dirtColor = vec3(0.45, 0.35, 0.25); // Brown dirt
-    color = mix(color, dirtColor, dirt * 0.6);
+  // Ground rendering with detail based on zoom level
+  if (u_zoom < 10.0) {
+    // Simple colors for low zoom levels
+    if (v_parkType < 0.5) {
+      color = vec3(0.26, 0.50, 0.30); // Nature reserve
+    } else if (v_parkType < 1.5) {
+      color = vec3(0.30, 0.56, 0.34); // Protected area
+    } else {
+      color = vec3(0.34, 0.60, 0.38); // Regular park
+    }
+  } else {
+    // Detailed textures for higher zoom levels
+    if (v_parkType < 0.5) {
+      color = natureReserve(pos);
+    } else if (v_parkType < 1.5) {
+      color = protectedArea(pos);
+    } else {
+      color = regularPark(pos);
+    }
   }
-
-  // Apply dead grass patches (brownish)
-  float deadGrass = deadGrassPattern(worldPos2D);
-  if (deadGrass > 0.0) {
-    vec3 deadColor = vec3(0.55, 0.50, 0.30); // Dead yellowish-brown
-    color = mix(color, deadColor, deadGrass * 0.5);
-  }
-
-  // Apply grass blades (lighter green)
-  float grass = grassPattern(worldPos2D);
-  if (grass > 0.0) {
-    vec3 grassColor = baseColor * 1.3; // Lighter blade
-    color = mix(color, grassColor, 0.6);
-  }
-
-  // Apply weeds (darker green spots)
-  float weeds = weedPattern(worldPos2D);
-  if (weeds > 0.0) {
-    vec3 weedColor = baseColor * 0.7; // Darker, wild growth
-    color = mix(color, weedColor, 0.7);
-  }
-
-  // Apply wildflowers (small colorful spots)
-  vec3 flowers = wildflowerPattern(worldPos2D);
-  if (length(flowers) > 0.0) {
-    color = mix(color, flowers, 0.8);
-  }
-
-  // Add noise/grain to entire surface
-  float grain = hash(pixelatedPos) * 0.12;
-  color = color * (0.90 + grain);
 
   gl_FragColor = vec4(color, 1.0);
 }

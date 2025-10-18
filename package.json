@@ -36,8 +36,10 @@
     "maplibre-gl": "^5.9.0"
   },
   "dependencies": {
+    "@mapbox/point-geometry": "^0.1.0",
     "@maplibre/maplibre-gl-style-spec": "^24.2.0",
     "earcut": "^3.0.2",
-    "gl-matrix": "^3.4.4"
+    "gl-matrix": "^3.4.4",
+    "three": "^0.180.0"
   }
 }

@@ -100,10 +100,6 @@ export class SimpleBackgroundLayer {
   render(gl: WebGLRenderingContext, matrix: number[]) {
     if (!this.program || !this.buffer || !this.map) return;
 
-    // Skip rendering at very low zoom levels for performance
-    const zoom = this.map.getZoom();
-    if (zoom < 4) return;
-
     gl.useProgram(this.program);
 
     // Use the provided matrix for positioning
