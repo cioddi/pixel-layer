@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build library and demo
+        run: npm run build
+
+      - name: Package preview
+        run: npm pack --dry-run
+
+      - name: Upload demo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-layer-demo
+          path: dist-demo
+          if-no-files-found: error
