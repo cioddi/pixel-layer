@@ -298,7 +298,7 @@ export class PixelArtParksLayer {
     return Number.isFinite(value) ? value : 2;
   }
 
-  private static defaultFilter(parkClass: string): boolean {
+  private static defaultFilter(/*parkClass: string*/): boolean {
     // Accept all valid park features - parks should not be filtered by default
     // This helps avoid rendering issues at low zoom levels
     return true;
