@@ -62,7 +62,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 const map = new maplibregl.Map({
   container: 'map',
-  style: '/empty-style.json',
+  style: '/pixel-layer/empty-style.json',
   center: [13.4, 52.52],
   zoom: 16,
   pitch: 60
